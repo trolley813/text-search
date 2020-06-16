@@ -51,5 +51,6 @@ if __name__ == "__main__":
     cur.execute("CREATE MATERIALIZED VIEW idf_doc_count ENGINE = Log() POPULATE "
                 "AS SELECT word_id, COUNT(DISTINCT document_id) FROM inv_index GROUP BY word_id")
     cur.execute("CREATE MATERIALIZED VIEW doc_words ENGINE = MergeTree() ORDER BY word_id "
-                "PARTITION BY word_id % 100 POPULATE AS SELECT distinct document_id, word_id FROM inv_index")
+                "PARTITION BY word_id % 100 POPULATE AS "
+                "SELECT word_id, document_id, count(*) AS word_count FROM inv_index GROUP BY word_id, document_id")
     con.close()

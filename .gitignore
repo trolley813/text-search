@@ -1,7 +1,6 @@
 # Created by .ignore support plugin (hsz.mobi)
 
-# to avoid storing large file in Git
-inverted_index.db
-
 # virtual environment
 venv/
+avenv/
+wslvenv/
