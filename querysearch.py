@@ -43,20 +43,15 @@ def tri_idf(word_id_1, word_id_2, word_id_3):
     cur.execute("SELECT * FROM idf_doc_count_trigrams WHERE word_id_1 = %(id1)s "
                 "AND word_id_2 = %(id2)s AND word_id_3 = %(id3)s",
                 {"id1": word_id_1, "id2": word_id_2, "id3": word_id_3})
-    n_word = cur.fetchone()[2] if cur.rowcount else 0
+    n_word = cur.fetchone()[3] if cur.rowcount else 0
     con.close()
     return log2((n_total - n_word + 0.5) / (n_word + 0.5)) - log2(0.5 / (n_total + 0.5))
 
-def querysearch(query):
-    weights = [1, 10, 100]
-    results = []
+
+def get_word_ids(query):
     con = clickhouse_driver.connect("clickhouse://127.0.0.1")
-    ps = PorterStemmer()
-    print("Splitting words")
     ids = []
-    cur = con.cursor()
-    cur.execute("SELECT * FROM avg_doc_len")
-    avg_len = cur.fetchone()[0]
+    ps = PorterStemmer()
     for word_start, word_end in TreebankWordTokenizer().span_tokenize(query):
         word = query[word_start:word_end]
         stem = ps.stem(word)
@@ -68,7 +63,19 @@ def querysearch(query):
         else:
             id = row[0]
             ids.append(id)
+    return ids
+
+
+def querysearch(query):
+    weights = [1, 10, 100]
+    results = []
+    con = clickhouse_driver.connect("clickhouse://127.0.0.1")
+    print("Splitting words")
+    cur = con.cursor()
+    cur.execute("SELECT * FROM avg_doc_len")
+    avg_len = cur.fetchone()[0]
     print("Querying the database")
+    ids = get_word_ids(query)
     id_sets = []
     for id in ids:
         print(f"Trying word with id {id}")
@@ -82,50 +89,51 @@ def querysearch(query):
     tri_idfs = [tri_idf(word_id_1, word_id_2, word_id_3)
                for (word_id_1, word_id_2, word_id_3) in
                ((ids[i], ids[i + 1], ids[i + 2]) for i in range(len(ids) - 2))]
-    idfs = [idf(word_id) for word_id in ids]
     print(f"IDFs: {idfs}")
     print(f"Bigram IDFs: {bi_idfs}")
     print(f"Trigram IDFs: {tri_idfs}")
     docs = id_sets[0].intersection(*id_sets[1:])
     print(f"{len(docs)} documents found")
     for doc in docs:
-
-        cur = con.cursor()
-        cur.execute("SELECT name FROM documents WHERE id = %(did)s", {"did": doc})
-        doc_name = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM inv_index WHERE document_id = %(did)s", {"did": doc})
-        doc_len = cur.fetchone()[0]
-        # ordinary word count
-        counts = []
-        for id in ids:
+        try:
             cur = con.cursor()
-            cur.execute("SELECT word_count FROM doc_words WHERE word_id = %(wid)s AND document_id = %(did)s",
-                        {"wid": id, "did": doc})
-            counts.append(cur.fetchone()[0])
-        # bigram count
-        bi_counts = []
-        for (id1, id2) in ((ids[i], ids[i+1]) for i in range(len(ids) - 1)):
-            cur = con.cursor()
-            cur.execute("SELECT COUNT(*) FROM inv_index_bigrams WHERE word_id_1 = %(wid1)s AND word_id_2 = %(wid2)s "
-                        "AND document_id = %(did)s",
-                        {"wid1": id1, "wid2": id2, "did": doc})
-            bi_counts.append(cur.fetchone()[0])
-        # trigram count
-        tri_counts = []
-        for (id1, id2, id3) in ((ids[i], ids[i + 1], ids[i + 2]) for i in range(len(ids) - 2)):
-            cur = con.cursor()
-            cur.execute("SELECT COUNT(*) FROM inv_index_trigrams WHERE word_id_1 = %(wid1)s AND word_id_2 = %(wid2)s "
-                        "AND word_id_3 = %(wid3)s AND document_id = %(did)s",
-                        {"wid1": id1, "wid2": id2, "wid3": id3, "did": doc})
-            tri_counts.append(cur.fetchone()[0])
-        bm25_score = (
-                weights[0] * bm25(doc_len, avg_len, idfs, counts) +
-                weights[1] * bm25(doc_len - 1, avg_len - 1, bi_idfs, bi_counts) +
-                weights[2] * bm25(doc_len - 2, avg_len - 2, tri_idfs, tri_counts)
-        )
-        print(f"Doc ID {doc}: length = {doc_len}, ordinary count = {counts}, bigram counts = {bi_counts}, "
-              f"trigram counts = {tri_counts}, BM25 score = {bm25_score}")
-        results.append((doc, doc_name, doc_len, counts, bi_counts, tri_counts, bm25_score))
+            cur.execute("SELECT name FROM documents WHERE id = %(did)s", {"did": doc})
+            doc_name = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM inv_index WHERE document_id = %(did)s", {"did": doc})
+            doc_len = cur.fetchone()[0]
+            # ordinary word count
+            counts = []
+            for id in ids:
+                cur = con.cursor()
+                cur.execute("SELECT word_count FROM doc_words WHERE word_id = %(wid)s AND document_id = %(did)s",
+                            {"wid": id, "did": doc})
+                counts.append(cur.fetchone()[0])
+            # bigram count
+            bi_counts = []
+            for (id1, id2) in ((ids[i], ids[i+1]) for i in range(len(ids) - 1)):
+                cur = con.cursor()
+                cur.execute("SELECT COUNT(*) FROM inv_index_bigrams WHERE word_id_1 = %(wid1)s AND word_id_2 = %(wid2)s "
+                            "AND document_id = %(did)s",
+                            {"wid1": id1, "wid2": id2, "did": doc})
+                bi_counts.append(cur.fetchone()[0])
+            # trigram count
+            tri_counts = []
+            for (id1, id2, id3) in ((ids[i], ids[i + 1], ids[i + 2]) for i in range(len(ids) - 2)):
+                cur = con.cursor()
+                cur.execute("SELECT COUNT(*) FROM inv_index_trigrams WHERE word_id_1 = %(wid1)s AND word_id_2 = %(wid2)s "
+                            "AND word_id_3 = %(wid3)s AND document_id = %(did)s",
+                            {"wid1": id1, "wid2": id2, "wid3": id3, "did": doc})
+                tri_counts.append(cur.fetchone()[0])
+            bm25_score = (
+                    weights[0] * bm25(doc_len, avg_len, idfs, counts) +
+                    weights[1] * bm25(doc_len - 1, avg_len - 1, bi_idfs, bi_counts) +
+                    weights[2] * bm25(doc_len - 2, avg_len - 2, tri_idfs, tri_counts)
+            )
+            print(f"Doc ID {doc}: length = {doc_len}, ordinary count = {counts}, bigram counts = {bi_counts}, "
+                  f"trigram counts = {tri_counts}, BM25 score = {bm25_score}")
+            results.append((doc, doc_name, doc_len, counts, bi_counts, tri_counts, bm25_score))
+        except EOFError:
+            print("Warning: Problems with database")
     results.sort(key=lambda r: -r[-1])
     return results
 
